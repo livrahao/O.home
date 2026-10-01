@@ -1,6 +1,7 @@
 'use client';
 // Supabase 백엔드 — Postgres 테이블(행 단위) + Auth + Storage + Realtime
 // 스키마·권한: supabase/schema.sql
+
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   Backend,
@@ -11,6 +12,7 @@ import {
   diffList,
   metaOf,
 } from './types';
+import { visFloorOf } from '../visFloor';
 
 const BUCKET = 'ohome';
 const PROBE = ['profiles', 'site_settings', 'posts', 'characters'];
@@ -137,7 +139,10 @@ export async function createSupabaseBackend(
 
       const { count } = await sb
         .from('profiles')
-        .select('id', { head: true, count: 'exact' })
+        .select('id', {
+          head: true,
+          count: 'exact',
+        })
         .eq('role', 'admin');
 
       const hasAdmin = (count ?? 0) > 0;
@@ -240,7 +245,7 @@ export async function createSupabaseBackend(
         : { ok: true };
     },
 
-    // Supabase는 스키마의 트리거가 첫 가입자를 관리자로 만들어 준다 — 추가 작업 없음
+    // Supabase는 스키마의 트리거가 첫 가입자를 관리자로 만들어 준다.
     async claimOwner() {
       return { ok: true };
     },
@@ -248,7 +253,7 @@ export async function createSupabaseBackend(
     async listMembers() {
       const { data, error } = await sb
         .from('profiles')
-        .select('id, nickname, role')
+        .select('id, nickname, role, avatar_url')
         .order('created_at');
 
       if (error) throw error;
@@ -258,6 +263,7 @@ export async function createSupabaseBackend(
           id: string;
           nickname: string;
           role: string;
+          avatar_url?: string | null;
         };
 
         return {
@@ -265,6 +271,7 @@ export async function createSupabaseBackend(
           nickname: p.nickname,
           role:
             (p.role as 'admin' | 'member') ?? 'member',
+          avatarUrl: p.avatar_url ?? undefined,
         };
       });
     },
@@ -301,6 +308,7 @@ export async function createSupabaseBackend(
       const {
         inserts,
         updates,
+        moves,
         deletes,
       } = diffList(prev, next);
 
@@ -314,33 +322,108 @@ export async function createSupabaseBackend(
         const {
           authorId,
           visibility,
-        } = metaOf(item, uid);
+          editorIds,
+        } = metaOf(
+          item,
+          uid,
+          visFloorOf(coll, item),
+        );
 
         return {
           id: item.id,
           data: item,
           author_id: authorId,
           visibility,
+          editor_ids: editorIds,
           sort,
         };
       };
 
-      if (inserts.length) {
+      // 큰 본문(TRPG 로그 등)이 여럿일 때 요청이 너무 커지지 않도록
+      // 대략 4MB 단위로 나눠서 전송한다.
+      const bySize = (
+        rows: {
+          item: T;
+          sort: number;
+        }[],
+      ) => {
+        const parts: {
+          item: T;
+          sort: number;
+        }[][] = [];
+
+        let cur: {
+          item: T;
+          sort: number;
+        }[] = [];
+
+        let bytes = 0;
+
+        for (const r of rows) {
+          const size =
+            JSON.stringify(r.item).length + 200;
+
+          if (
+            cur.length &&
+            bytes + size > 4_000_000
+          ) {
+            parts.push(cur);
+            cur = [];
+            bytes = 0;
+          }
+
+          cur.push(r);
+          bytes += size;
+        }
+
+        if (cur.length) {
+          parts.push(cur);
+        }
+
+        return parts;
+      };
+
+      for (const part of bySize(inserts)) {
         const { error } = await sb
           .from(coll)
-          .insert(inserts.map(toRow));
+          .insert(part.map(toRow));
 
         if (error) throw error;
       }
 
-      if (updates.length) {
+      for (const part of bySize(updates)) {
         const { error } = await sb
           .from(coll)
-          .upsert(updates.map(toRow), {
+          .upsert(part.map(toRow), {
             onConflict: 'id',
           });
 
         if (error) throw error;
+      }
+
+      // 자리만 바뀐 항목 — sort만 수정
+      for (
+        let i = 0;
+        i < moves.length;
+        i += 25
+      ) {
+        const errs = await Promise.all(
+          moves
+            .slice(i, i + 25)
+            .map((m) =>
+              sb
+                .from(coll)
+                .update({
+                  sort: m.sort,
+                })
+                .eq('id', m.id)
+                .then((r) => r.error),
+            ),
+        );
+
+        const bad = errs.find(Boolean);
+
+        if (bad) throw bad;
       }
 
       if (deletes.length) {
@@ -353,11 +436,90 @@ export async function createSupabaseBackend(
       }
     },
 
+    // 공개범위·편집 권한 목록을 다시 계산해서 덮어쓴다.
+    async refreshVis<T extends ListItem>(
+      coll: string,
+      items: T[],
+      uid: string | null,
+    ): Promise<number> {
+      const byKey = new Map<
+        string,
+        {
+          vis: string;
+          editorIds: string[];
+          ids: string[];
+        }
+      >();
+
+      items.forEach((it) => {
+        const {
+          visibility,
+          editorIds,
+        } = metaOf(
+          it,
+          uid,
+          visFloorOf(coll, it),
+        );
+
+        const key =
+          visibility +
+          '|' +
+          JSON.stringify(editorIds);
+
+        const g =
+          byKey.get(key) ??
+          {
+            vis: visibility,
+            editorIds,
+            ids: [],
+          };
+
+        g.ids.push(it.id);
+        byKey.set(key, g);
+      });
+
+      let n = 0;
+
+      for (
+        const {
+          vis,
+          editorIds,
+          ids,
+        } of byKey.values()
+      ) {
+        for (
+          let i = 0;
+          i < ids.length;
+          i += 200
+        ) {
+          const part = ids.slice(
+            i,
+            i + 200,
+          );
+
+          const { error } = await sb
+            .from(coll)
+            .update({
+              visibility: vis,
+              editor_ids: editorIds,
+            })
+            .in('id', part);
+
+          if (error) throw error;
+
+          n += part.length;
+        }
+      }
+
+      return n;
+    },
+
     // Realtime 구독
     // 같은 이름의 채널을 여러 컴포넌트가 공유하지 않도록
     // 매번 고유한 채널 이름을 만든다.
     subscribe(coll, onChange) {
-      const topic = `ohome:${coll}:${crypto.randomUUID()}`;
+      const topic =
+        `ohome:${coll}:${crypto.randomUUID()}`;
 
       const ch = sb
         .channel(topic)
@@ -396,7 +558,8 @@ export async function createSupabaseBackend(
           {
             key,
             value,
-            updated_at: new Date().toISOString(),
+            updated_at:
+              new Date().toISOString(),
           },
           {
             onConflict: 'key',
@@ -413,10 +576,15 @@ export async function createSupabaseBackend(
 
       if (error) throw error;
 
-      const out: Record<string, unknown> = {};
+      const out: Record<
+        string,
+        unknown
+      > = {};
 
       (data ?? []).forEach((r) => {
-        out[(r as { key: string }).key] =
+        out[
+          (r as { key: string }).key
+        ] =
           (r as { value: unknown }).value;
       });
 
@@ -424,15 +592,17 @@ export async function createSupabaseBackend(
     },
 
     async uploadFile(blob, ext) {
-      const path = `${Date.now().toString(36)}${Math.random()
-        .toString(36)
-        .slice(2, 8)}.${ext}`;
+      const path =
+        `${Date.now().toString(36)}${Math.random()
+          .toString(36)
+          .slice(2, 8)}.${ext}`;
 
       const { error } = await sb.storage
         .from(BUCKET)
         .upload(path, blob, {
           contentType:
-            blob.type || 'application/octet-stream',
+            blob.type ||
+            'application/octet-stream',
           cacheControl: '31536000',
           upsert: false,
         });
@@ -458,12 +628,13 @@ export async function createSupabaseBackend(
         ;
         offset += PAGE
       ) {
-        const { data, error } = await sb.storage
-          .from(BUCKET)
-          .list('', {
-            limit: PAGE,
-            offset,
-          });
+        const { data, error } =
+          await sb.storage
+            .from(BUCKET)
+            .list('', {
+              limit: PAGE,
+              offset,
+            });
 
         if (error) throw error;
 
@@ -476,9 +647,11 @@ export async function createSupabaseBackend(
               .getPublicUrl(f.name)
               .data.publicUrl,
             size:
-              (f.metadata as {
-                size?: number;
-              } | null)?.size ?? 0,
+              (
+                f.metadata as {
+                  size?: number;
+                } | null
+              )?.size ?? 0,
           });
         });
 
@@ -507,7 +680,8 @@ export async function createSupabaseBackend(
     },
 
     async deleteMember(id) {
-      // profiles 행만 지운다 — auth.users 삭제는 service_role 키가 필요해 공개 홈에서는 불가
+      // profiles 행만 지운다 — auth.users 삭제는
+      // service_role 키가 필요해 공개 홈에서는 불가
       const { error } = await sb
         .from('profiles')
         .delete()
