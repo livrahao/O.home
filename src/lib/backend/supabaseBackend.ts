@@ -51,7 +51,9 @@ export async function createSupabaseBackend(
         (u.user_metadata?.nickname as string) ??
         u.email ??
         'user',
-      role: (prof?.role as 'admin' | 'member') ?? 'member',
+      role:
+        (prof?.role as 'admin' | 'member') ??
+        'member',
       email: u.email,
       avatarUrl: prof?.avatar_url ?? undefined,
       avatarColor: prof?.avatar_color ?? undefined,
@@ -62,7 +64,9 @@ export async function createSupabaseBackend(
     kind: 'supabase',
 
     async check(): Promise<BackendCheck> {
-      const fail = (p: Partial<BackendCheck>): BackendCheck =>
+      const fail = (
+        p: Partial<BackendCheck>,
+      ): BackendCheck =>
         ({
           ok: false,
           reachable: false,
@@ -86,12 +90,20 @@ export async function createSupabaseBackend(
             /does not exist/i.test(error.message)
           ) {
             reachable = true;
-          } else if (/JWT|api key|Invalid/i.test(error.message)) {
+          } else if (
+            /JWT|api key|Invalid/i.test(
+              error.message,
+            )
+          ) {
             return fail({
               message:
                 'anon key가 올바르지 않습니다 — Supabase → Settings → API에서 anon public 키를 다시 복사해 주세요.',
             });
-          } else if (/fetch|network|Load failed/i.test(error.message)) {
+          } else if (
+            /fetch|network|Load failed/i.test(
+              error.message,
+            )
+          ) {
             return fail({
               message:
                 '프로젝트에 닿지 못했습니다 — Project URL이 정확한지, 프로젝트가 일시정지(Paused) 상태는 아닌지 확인해 주세요.',
@@ -106,7 +118,8 @@ export async function createSupabaseBackend(
         }
       } catch {
         return fail({
-          message: '프로젝트에 접속할 수 없습니다 — URL을 확인해 주세요.',
+          message:
+            '프로젝트에 접속할 수 없습니다 — URL을 확인해 주세요.',
         });
       }
 
@@ -115,13 +128,18 @@ export async function createSupabaseBackend(
       for (const t of PROBE) {
         const { error } = await sb
           .from(t)
-          .select('*', { head: true, count: 'exact' })
+          .select('*', {
+            head: true,
+            count: 'exact',
+          })
           .limit(1);
 
         if (
           error &&
           (error.code === '42P01' ||
-            /does not exist/i.test(error.message))
+            /does not exist/i.test(
+              error.message,
+            ))
         ) {
           missing.push(t);
         }
@@ -159,42 +177,59 @@ export async function createSupabaseBackend(
 
     async currentUser() {
       const { data } = await sb.auth.getUser();
+
       return toUser(data.user);
     },
 
     onAuthChange(cb) {
-      const { data: sub } = sb.auth.onAuthStateChange(
-        (_e, session) => {
-          void toUser(session?.user).then(cb);
-        },
-      );
+      const { data: sub } =
+        sb.auth.onAuthStateChange(
+          (_e, session) => {
+            void toUser(session?.user).then(cb);
+          },
+        );
 
-      return () => sub.subscription.unsubscribe();
+      return () =>
+        sub.subscription.unsubscribe();
     },
 
     async signIn(id, password) {
-      const { error } = await sb.auth.signInWithPassword({
-        email: id,
-        password,
-      });
+      const { error } =
+        await sb.auth.signInWithPassword({
+          email: id,
+          password,
+        });
 
       return error
-        ? { ok: false, error: error.message }
-        : { ok: true };
+        ? {
+            ok: false,
+            error: error.message,
+          }
+        : {
+            ok: true,
+          };
     },
 
     async signUp(id, password, nickname) {
-      const { error } = await sb.auth.signUp({
-        email: id,
-        password,
-        options: {
-          data: { nickname },
-        },
-      });
+      const { error } =
+        await sb.auth.signUp({
+          email: id,
+          password,
+          options: {
+            data: {
+              nickname,
+            },
+          },
+        });
 
       return error
-        ? { ok: false, error: error.message }
-        : { ok: true };
+        ? {
+            ok: false,
+            error: error.message,
+          }
+        : {
+            ok: true,
+          };
     },
 
     async signOut() {
@@ -202,18 +237,31 @@ export async function createSupabaseBackend(
     },
 
     async resetPassword(email) {
-      const { error } = await sb.auth.resetPasswordForEmail(email);
+      const { error } =
+        await sb.auth.resetPasswordForEmail(
+          email,
+        );
 
       return error
-        ? { ok: false, error: error.message }
-        : { ok: true };
+        ? {
+            ok: false,
+            error: error.message,
+          }
+        : {
+            ok: true,
+          };
     },
 
     // 프로필 수정
+    //
     // 기존 profiles 행이 있으면 UPDATE
-    // 없으면 nickname을 포함해서 INSERT
+    // 기존 행이 없으면 nickname을 포함해서 INSERT
+    //
+    // avatar만 변경할 때 nickname이 null로 들어가면서
+    // NOT NULL 오류가 발생하는 문제를 방지한다.
     async updateProfile(patch) {
-      const { data } = await sb.auth.getUser();
+      const { data } =
+        await sb.auth.getUser();
 
       if (!data.user) {
         return {
@@ -224,7 +272,7 @@ export async function createSupabaseBackend(
 
       const uid = data.user.id;
 
-      // 먼저 현재 사용자의 profiles 행이 존재하는지 확인
+      // 현재 사용자의 profiles 행이 존재하는지 확인
       const {
         data: existing,
         error: readError,
@@ -243,18 +291,30 @@ export async function createSupabaseBackend(
 
       // 기존 프로필이 있으면 UPDATE
       if (existing) {
-        const row: Record<string, unknown> = {};
+        const row: Record<
+          string,
+          unknown
+        > = {};
 
-        if (patch.nickname !== undefined) {
-          row.nickname = patch.nickname;
+        if (
+          patch.nickname !== undefined
+        ) {
+          row.nickname =
+            patch.nickname;
         }
 
-        if (patch.avatarUrl !== undefined) {
-          row.avatar_url = patch.avatarUrl ?? null;
+        if (
+          patch.avatarUrl !== undefined
+        ) {
+          row.avatar_url =
+            patch.avatarUrl ?? null;
         }
 
-        if (patch.avatarColor !== undefined) {
-          row.avatar_color = patch.avatarColor ?? null;
+        if (
+          patch.avatarColor !== undefined
+        ) {
+          row.avatar_color =
+            patch.avatarColor ?? null;
         }
 
         const { error } = await sb
@@ -263,91 +323,135 @@ export async function createSupabaseBackend(
           .eq('id', uid);
 
         return error
-          ? { ok: false, error: error.message }
-          : { ok: true };
+          ? {
+              ok: false,
+              error: error.message,
+            }
+          : {
+              ok: true,
+            };
       }
 
       // profiles 행이 아직 없으면
       // nickname을 반드시 포함해서 INSERT
-      const row: Record<string, unknown> = {
+      const row: Record<
+        string,
+        unknown
+      > = {
         id: uid,
         nickname:
           patch.nickname ??
-          data.user.user_metadata?.nickname ??
+          data.user.user_metadata
+            ?.nickname ??
           data.user.email ??
           'user',
       };
 
-      if (patch.avatarUrl !== undefined) {
-        row.avatar_url = patch.avatarUrl ?? null;
+      if (
+        patch.avatarUrl !== undefined
+      ) {
+        row.avatar_url =
+          patch.avatarUrl ?? null;
       }
 
-      if (patch.avatarColor !== undefined) {
-        row.avatar_color = patch.avatarColor ?? null;
+      if (
+        patch.avatarColor !== undefined
+      ) {
+        row.avatar_color =
+          patch.avatarColor ?? null;
       }
 
-      const { error } = await sb
-        .from('profiles')
-        .insert(row);
+      const { error } =
+        await sb
+          .from('profiles')
+          .insert(row);
 
       return error
-        ? { ok: false, error: error.message }
-        : { ok: true };
+        ? {
+            ok: false,
+            error: error.message,
+          }
+        : {
+            ok: true,
+          };
     },
 
-    // Supabase는 스키마의 트리거가 첫 가입자를 관리자로 만들어 준다 — 추가 작업 없음
+    // 첫 가입 계정을 관리자 처리하는 부분은
+    // Supabase DB 트리거가 담당한다.
     async claimOwner() {
-      return { ok: true };
+      return {
+        ok: true,
+      };
     },
 
     async listMembers() {
-      const { data, error } = await sb
-        .from('profiles')
-        .select('id, nickname, role')
-        .order('created_at');
+      const { data, error } =
+        await sb
+          .from('profiles')
+          .select(
+            'id, nickname, role',
+          )
+          .order('created_at');
 
       if (error) throw error;
 
-      return (data ?? []).map((r) => {
-        const p = r as {
-          id: string;
-          nickname: string;
-          role: string;
-        };
+      return (data ?? []).map(
+        (r) => {
+          const p = r as {
+            id: string;
+            nickname: string;
+            role: string;
+          };
 
-        return {
-          id: p.id,
-          nickname: p.nickname,
-          role:
-            (p.role as 'admin' | 'member') ?? 'member',
-        };
-      });
+          return {
+            id: p.id,
+            nickname: p.nickname,
+            role:
+              (p.role as
+                | 'admin'
+                | 'member') ??
+              'member',
+          };
+        },
+      );
     },
 
-    async fetchList<T extends ListItem>(
-      coll: string,
-    ): Promise<T[]> {
-      const { data, error } = await sb
-        .from(coll)
-        .select('id, data, sort')
-        .order('sort', { ascending: true });
+    async fetchList<
+      T extends ListItem,
+    >(coll: string): Promise<T[]> {
+      const { data, error } =
+        await sb
+          .from(coll)
+          .select(
+            'id, data, sort',
+          )
+          .order('sort', {
+            ascending: true,
+          });
 
       if (error) throw error;
 
-      return (data ?? []).map((r) => {
-        const row = r as {
-          id: string;
-          data: Record<string, unknown>;
-        };
+      return (data ?? []).map(
+        (r) => {
+          const row = r as {
+            id: string;
+            data: Record<
+              string,
+              unknown
+            >;
+          };
 
-        return {
-          ...(row.data ?? {}),
-          id: row.id,
-        } as T;
-      });
+          return {
+            ...(row.data ?? {}),
+            id: row.id,
+          } as T;
+        },
+      );
     },
 
-    async syncList<T extends ListItem>(
+    async syncList<
+      T extends ListItem,
+    >(
       coll: string,
       prev: T[],
       next: T[],
@@ -381,38 +485,57 @@ export async function createSupabaseBackend(
       };
 
       if (inserts.length) {
-        const { error } = await sb
-          .from(coll)
-          .insert(inserts.map(toRow));
+        const { error } =
+          await sb
+            .from(coll)
+            .insert(
+              inserts.map(toRow),
+            );
 
         if (error) throw error;
       }
 
       if (updates.length) {
-        const { error } = await sb
-          .from(coll)
-          .upsert(updates.map(toRow), {
-            onConflict: 'id',
-          });
+        const { error } =
+          await sb
+            .from(coll)
+            .upsert(
+              updates.map(toRow),
+              {
+                onConflict: 'id',
+              },
+            );
 
         if (error) throw error;
       }
 
       if (deletes.length) {
-        const { error } = await sb
-          .from(coll)
-          .delete()
-          .in('id', deletes);
+        const { error } =
+          await sb
+            .from(coll)
+            .delete()
+            .in('id', deletes);
 
         if (error) throw error;
       }
     },
 
-    // Realtime 구독
-    // 같은 이름의 채널을 여러 컴포넌트가 공유하지 않도록
-    // 매번 고유한 채널 이름을 만든다.
-    subscribe(coll, onChange) {
-      const topic = `ohome:${coll}:${crypto.randomUUID()}`;
+    // Supabase Realtime
+    //
+    // 중요:
+    // 같은 "ohome:gallery" 같은 고정 채널을
+    // 여러 컴포넌트가 공유하면
+    //
+    // "cannot add postgres_changes callbacks
+    // for realtime:ohome:gallery after subscribe()"
+    //
+    // 오류가 발생할 수 있으므로 매번 고유한 채널명을 만든다.
+    subscribe(
+      coll,
+      onChange,
+    ) {
+      const topic =
+        `ohome:${coll}:${crypto.randomUUID()}`;
 
       const ch = sb
         .channel(topic)
@@ -428,76 +551,124 @@ export async function createSupabaseBackend(
         .subscribe();
 
       return () => {
-        void sb.removeChannel(ch);
+        void sb.removeChannel(
+          ch,
+        );
       };
     },
 
-    async fetchSetting<T>(key: string) {
-      const { data, error } = await sb
-        .from('site_settings')
-        .select('value')
-        .eq('key', key)
-        .maybeSingle();
+    async refreshVis() {
+      // 현재 로그인한 사용자의
+      // 최신 profiles 정보를 다시 읽게 한다.
+      //
+      // currentUser()가 호출될 때마다
+      // profiles 테이블을 새로 조회하므로
+      // 별도의 로컬 캐시는 필요하지 않다.
+      return;
+    },
+
+    async fetchSetting<T>(
+      key: string,
+    ) {
+      const { data, error } =
+        await sb
+          .from('site_settings')
+          .select('value')
+          .eq('key', key)
+          .maybeSingle();
 
       if (error) throw error;
 
-      return (data?.value ?? null) as T | null;
+      return (data?.value ??
+        null) as T | null;
     },
 
-    async saveSetting(key, value) {
-      const { error } = await sb
-        .from('site_settings')
-        .upsert(
-          {
-            key,
-            value,
-            updated_at: new Date().toISOString(),
-          },
-          {
-            onConflict: 'key',
-          },
-        );
+    async saveSetting(
+      key,
+      value,
+    ) {
+      const { error } =
+        await sb
+          .from('site_settings')
+          .upsert(
+            {
+              key,
+              value,
+              updated_at:
+                new Date().toISOString(),
+            },
+            {
+              onConflict: 'key',
+            },
+          );
 
       if (error) throw error;
     },
 
     async fetchAllSettings() {
-      const { data, error } = await sb
-        .from('site_settings')
-        .select('key, value');
+      const { data, error } =
+        await sb
+          .from('site_settings')
+          .select(
+            'key, value',
+          );
 
       if (error) throw error;
 
-      const out: Record<string, unknown> = {};
+      const out: Record<
+        string,
+        unknown
+      > = {};
 
-      (data ?? []).forEach((r) => {
-        out[(r as { key: string }).key] =
-          (r as { value: unknown }).value;
-      });
+      (data ?? []).forEach(
+        (r) => {
+          out[
+            (r as {
+              key: string;
+            }).key
+          ] = (
+            r as {
+              value: unknown;
+            }
+          ).value;
+        },
+      );
 
       return out;
     },
 
-    async uploadFile(blob, ext) {
-      const path = `${Date.now().toString(36)}${Math.random()
-        .toString(36)
-        .slice(2, 8)}.${ext}`;
+    async uploadFile(
+      blob,
+      ext,
+    ) {
+      const path =
+        `${Date.now().toString(36)}${Math.random()
+          .toString(36)
+          .slice(2, 8)}.${ext}`;
 
-      const { error } = await sb.storage
-        .from(BUCKET)
-        .upload(path, blob, {
-          contentType:
-            blob.type || 'application/octet-stream',
-          cacheControl: '31536000',
-          upsert: false,
-        });
+      const { error } =
+        await sb.storage
+          .from(BUCKET)
+          .upload(
+            path,
+            blob,
+            {
+              contentType:
+                blob.type ||
+                'application/octet-stream',
+              cacheControl:
+                '31536000',
+              upsert: false,
+            },
+          );
 
       if (error) throw error;
 
       return sb.storage
         .from(BUCKET)
-        .getPublicUrl(path)
-        .data.publicUrl;
+        .getPublicUrl(
+          path,
+        ).data.publicUrl;
     },
 
     async listFiles() {
@@ -513,7 +684,10 @@ export async function createSupabaseBackend(
         ;
         offset += PAGE
       ) {
-        const { data, error } = await sb.storage
+        const {
+          data,
+          error,
+        } = await sb.storage
           .from(BUCKET)
           .list('', {
             limit: PAGE,
@@ -522,51 +696,72 @@ export async function createSupabaseBackend(
 
         if (error) throw error;
 
-        const rows = data ?? [];
+        const rows =
+          data ?? [];
 
-        rows.forEach((f) => {
-          out.push({
-            ref: sb.storage
-              .from(BUCKET)
-              .getPublicUrl(f.name)
-              .data.publicUrl,
-            size:
-              (f.metadata as {
-                size?: number;
-              } | null)?.size ?? 0,
-          });
-        });
+        rows.forEach(
+          (f) => {
+            out.push({
+              ref: sb.storage
+                .from(BUCKET)
+                .getPublicUrl(
+                  f.name,
+                ).data.publicUrl,
+              size:
+                (
+                  f.metadata as {
+                    size?: number;
+                  } | null
+                )?.size ?? 0,
+            });
+          },
+        );
 
-        if (rows.length < PAGE) break;
+        if (
+          rows.length < PAGE
+        ) {
+          break;
+        }
       }
 
       return out;
     },
 
-    async deleteFile(ref) {
-      // 저장한 값은 공개 URL — 버킷 안 파일명만 떼어 지운다
-      const name = decodeURIComponent(
-        ref
-          .split('?')[0]
-          .split('/')
-          .pop() ?? '',
-      );
+    async deleteFile(
+      ref,
+    ) {
+      // 저장한 값은 공개 URL
+      // 버킷 안 파일명만 떼어서 삭제한다.
+      const name =
+        decodeURIComponent(
+          ref
+            .split('?')[0]
+            .split('/')
+            .pop() ?? '',
+        );
 
       if (!name) return;
 
-      const { error } = await sb.storage
-        .from(BUCKET)
-        .remove([name]);
+      const { error } =
+        await sb.storage
+          .from(BUCKET)
+          .remove([name]);
 
       if (error) throw error;
     },
 
-    async deleteMember(id) {
-      // profiles 행만 지운다 — auth.users 삭제는 service_role 키가 필요해 공개 홈에서는 불가
-      const { error } = await sb
-        .from('profiles')
-        .delete()
-        .eq('id', id);
+    async deleteMember(
+      id,
+    ) {
+      // profiles 행만 삭제한다.
+      //
+      // auth.users 삭제는 service_role 키가
+      // 필요하기 때문에 공개 홈에서는 하지 않는다.
+      const { error } =
+        await sb
+          .from('profiles')
+          .delete()
+          .eq('id', id);
 
       if (error) throw error;
     },
