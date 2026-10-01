@@ -66,15 +66,14 @@ export async function createSupabaseBackend(
     async check(): Promise<BackendCheck> {
       const fail = (
         p: Partial<BackendCheck>,
-      ): BackendCheck =>
-        ({
-          ok: false,
-          reachable: false,
-          schema: false,
-          hasAdmin: false,
-          message: '',
-          ...p,
-        });
+      ): BackendCheck => ({
+        ok: false,
+        reachable: false,
+        schema: false,
+        hasAdmin: false,
+        message: '',
+        ...p,
+      });
 
       let reachable = false;
 
@@ -91,18 +90,14 @@ export async function createSupabaseBackend(
           ) {
             reachable = true;
           } else if (
-            /JWT|api key|Invalid/i.test(
-              error.message,
-            )
+            /JWT|api key|Invalid/i.test(error.message)
           ) {
             return fail({
               message:
                 'anon key가 올바르지 않습니다 — Supabase → Settings → API에서 anon public 키를 다시 복사해 주세요.',
             });
           } else if (
-            /fetch|network|Load failed/i.test(
-              error.message,
-            )
+            /fetch|network|Load failed/i.test(error.message)
           ) {
             return fail({
               message:
@@ -136,10 +131,10 @@ export async function createSupabaseBackend(
 
         if (
           error &&
-          (error.code === '42P01' ||
-            /does not exist/i.test(
-              error.message,
-            ))
+          (
+            error.code === '42P01' ||
+            /does not exist/i.test(error.message)
+          )
         ) {
           missing.push(t);
         }
@@ -238,9 +233,7 @@ export async function createSupabaseBackend(
 
     async resetPassword(email) {
       const { error } =
-        await sb.auth.resetPasswordForEmail(
-          email,
-        );
+        await sb.auth.resetPasswordForEmail(email);
 
       return error
         ? {
@@ -299,8 +292,7 @@ export async function createSupabaseBackend(
         if (
           patch.nickname !== undefined
         ) {
-          row.nickname =
-            patch.nickname;
+          row.nickname = patch.nickname;
         }
 
         if (
@@ -341,8 +333,7 @@ export async function createSupabaseBackend(
         id: uid,
         nickname:
           patch.nickname ??
-          data.user.user_metadata
-            ?.nickname ??
+          data.user.user_metadata?.nickname ??
           data.user.email ??
           'user',
       };
@@ -388,9 +379,7 @@ export async function createSupabaseBackend(
       const { data, error } =
         await sb
           .from('profiles')
-          .select(
-            'id, nickname, role',
-          )
+          .select('id, nickname, role')
           .order('created_at');
 
       if (error) throw error;
@@ -422,9 +411,7 @@ export async function createSupabaseBackend(
       const { data, error } =
         await sb
           .from(coll)
-          .select(
-            'id, data, sort',
-          )
+          .select('id, data, sort')
           .order('sort', {
             ascending: true,
           });
@@ -522,14 +509,9 @@ export async function createSupabaseBackend(
 
     // Supabase Realtime
     //
-    // 중요:
-    // 같은 "ohome:gallery" 같은 고정 채널을
-    // 여러 컴포넌트가 공유하면
-    //
-    // "cannot add postgres_changes callbacks
-    // for realtime:ohome:gallery after subscribe()"
-    //
-    // 오류가 발생할 수 있으므로 매번 고유한 채널명을 만든다.
+    // 고정된 채널명을 사용하지 않고
+    // 매번 고유한 채널명을 만들어
+    // 중복 postgres_changes callback 오류를 방지한다.
     subscribe(
       coll,
       onChange,
@@ -551,20 +533,54 @@ export async function createSupabaseBackend(
         .subscribe();
 
       return () => {
-        void sb.removeChannel(
-          ch,
-        );
+        void sb.removeChannel(ch);
       };
     },
 
-    async refreshVis() {
-      // 현재 로그인한 사용자의
-      // 최신 profiles 정보를 다시 읽게 한다.
-      //
-      // currentUser()가 호출될 때마다
-      // profiles 테이블을 새로 조회하므로
-      // 별도의 로컬 캐시는 필요하지 않다.
-      return;
+    // Backend 타입에서 요구하는 refreshVis
+    //
+    // visibility / author 정보를 다시 저장하고
+    // 처리한 행의 개수를 반환한다.
+    async refreshVis<
+      T extends ListItem,
+    >(
+      coll: string,
+      items: T[],
+      uid: string | null,
+    ): Promise<number> {
+      if (!items.length) {
+        return 0;
+      }
+
+      const rows = items.map(
+        (item, index) => {
+          const {
+            authorId,
+            visibility,
+          } = metaOf(item, uid);
+
+          return {
+            id: item.id,
+            data: item,
+            author_id: authorId,
+            visibility,
+            sort: index,
+          };
+        },
+      );
+
+      const { error } =
+        await sb
+          .from(coll)
+          .upsert(rows, {
+            onConflict: 'id',
+          });
+
+      if (error) {
+        throw error;
+      }
+
+      return rows.length;
     },
 
     async fetchSetting<T>(
@@ -609,9 +625,7 @@ export async function createSupabaseBackend(
       const { data, error } =
         await sb
           .from('site_settings')
-          .select(
-            'key, value',
-          );
+          .select('key, value');
 
       if (error) throw error;
 
@@ -730,8 +744,6 @@ export async function createSupabaseBackend(
     async deleteFile(
       ref,
     ) {
-      // 저장한 값은 공개 URL
-      // 버킷 안 파일명만 떼어서 삭제한다.
       const name =
         decodeURIComponent(
           ref
@@ -754,7 +766,6 @@ export async function createSupabaseBackend(
       id,
     ) {
       // profiles 행만 삭제한다.
-      //
       // auth.users 삭제는 service_role 키가
       // 필요하기 때문에 공개 홈에서는 하지 않는다.
       const { error } =
